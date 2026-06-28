@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Île aux Lettres — éditeur de dialogues</title>
+    <link rel="stylesheet" href="src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar">
+        <div class="brand">
+          <span class="dot"></span>
+          <strong id="project-name">Île aux Lettres</strong>
+          <span id="room-code" class="chip">POSTE-42</span>
+        </div>
+        <div class="actions">
+          <button id="btn-export" class="primary">Exporter .yarn</button>
+        </div>
+      </header>
+
+      <main>
+        <aside id="sidebar"></aside>
+        <section id="canvas-wrap">
+          <div id="canvas-toolbar">
+            <span id="canvas-title">—</span>
+            <span class="grow"></span>
+            <button id="btn-add-hub" class="ghost">+ Aiguillage</button>
+            <button id="btn-add-node" class="ghost">+ Nœud</button>
+          </div>
+          <div id="canvas">
+            <svg id="connectors"></svg>
+          </div>
+        </section>
+        <aside id="inspector"></aside>
+      </main>
+
+      <footer id="validation"></footer>
+    </div>
+
+    <script type="module" src="src/app.js"></script>
+  </body>
+</html>

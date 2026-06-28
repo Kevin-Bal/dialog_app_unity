@@ -1,0 +1,17 @@
+# Dépendances
+node_modules/
+
+# OS
+.DS_Store
+
+# Éditeurs
+.vscode/
+.idea/
+
+# Réglages locaux Claude Code (spécifiques à la machine)
+.claude/settings.local.json
+
+# Secrets Firebase (à venir) — ne jamais committer les clés serveur
+serviceAccountKey.json
+.env
+.env.local
