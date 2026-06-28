@@ -9,7 +9,8 @@
  *
  * Vocabulaire :
  *  - Project   : la salle partagée entière (un "code" = un Project).
- *  - settings  : le registre central commun (hameaux, personnages, variables).
+ *  - settings  : le registre central commun (groupes, variables).
+ *  - Group     : un regroupement de personnages, librement nommé (ex: un hameau).
  *  - Character : un PNJ. Ses dialogues = une liste de Node.
  *  - Node      : un nœud de dialogue. Soit un "hub" (aiguillage), soit du contenu.
  *  - Variable  : un drapeau d'état partagé ($marie_lettre_livree, etc.).
@@ -24,12 +25,12 @@ export const SCHEMA_VERSION = 1;
  * @property {Object<string, Character>} characters - indexés par characterId
  *
  * @typedef {Object} Settings
- * @property {Hameau[]} hameaux
+ * @property {Group[]} groups           - regroupements de personnages (librement nommés)
  * @property {Variable[]} variables     - registre des drapeaux d'état
  *
- * @typedef {Object} Hameau
+ * @typedef {Object} Group
  * @property {string} id
- * @property {string} name
+ * @property {string} name              - nom modifiable affiché dans l'UI
  *
  * @typedef {Object} Variable
  * @property {string} name              - identifiant Yarn SANS le $ (ex: "marie_lettre_livree")
@@ -40,7 +41,7 @@ export const SCHEMA_VERSION = 1;
  * @typedef {Object} Character
  * @property {string} id
  * @property {string} name              - nom affiché et utilisé comme locuteur ("Marie")
- * @property {string} hameauId
+ * @property {?string} groupId          - id du Group d'appartenance (null = sans groupe)
  * @property {Node[]} nodes
  *
  * @typedef {Object} Node
@@ -92,13 +93,70 @@ const uid = (prefix) =>
 export function createProject(name, code) {
   return {
     meta: { name, code, schemaVersion: SCHEMA_VERSION, updatedAt: Date.now() },
-    settings: { hameaux: [], variables: [] },
+    settings: { groups: [], variables: [] },
     characters: {},
   };
 }
 
-export function createCharacter(name, hameauId) {
-  return { id: uid("chr"), name, hameauId, nodes: [] };
+export function createGroup(name) {
+  return { id: uid("grp"), name };
+}
+
+/**
+ * Transforme un libellé lisible en identifiant Yarn valide (sans le $).
+ *   "Lettre à Jeanne livrée" -> "lettre_a_jeanne_livree"
+ * Un identifiant Yarn ne peut pas commencer par un chiffre.
+ */
+export function slugifyName(label) {
+  const s = (label || "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "") // enlève les accents
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return /^[a-z]/.test(s) ? s : "v_" + s;
+}
+
+/**
+ * Crée une variable du registre à partir d'un libellé lisible.
+ * L'identifiant Yarn (`name`) est généré et rendu unique ; les écrivains ne le
+ * tapent jamais à la main (décision n°4).
+ * @param {string} label
+ * @param {('bool'|'number'|'string')} type
+ * @param {string[]} existingNames - noms déjà pris (pour garantir l'unicité)
+ */
+export function createVariable(label, type = "bool", existingNames = []) {
+  const base = slugifyName(label) || "variable";
+  let name = base;
+  let i = 2;
+  while (existingNames.includes(name)) name = `${base}_${i++}`;
+  const def = type === "bool" ? false : type === "number" ? 0 : "";
+  return { name, type, label: (label || base).trim(), default: def };
+}
+
+/**
+ * Met un projet au format courant (migration douce des anciennes salles).
+ * Avant, les regroupements s'appelaient "hameaux"/"hameauId" → renommés en
+ * "groups"/"groupId". On convertit sans perdre de données. Idempotent.
+ * @param {Project} p
+ * @returns {Project} le même objet, normalisé
+ */
+export function normalizeProject(p) {
+  if (!p || typeof p !== "object") return p;
+  p.settings = p.settings || { groups: [], variables: [] };
+  if (!Array.isArray(p.settings.groups)) {
+    p.settings.groups = Array.isArray(p.settings.hameaux) ? p.settings.hameaux : [];
+  }
+  delete p.settings.hameaux;
+  for (const c of Object.values(p.characters || {})) {
+    if (c.groupId === undefined) c.groupId = c.hameauId ?? null;
+    delete c.hameauId;
+  }
+  return p;
+}
+
+export function createCharacter(name, groupId = null) {
+  return { id: uid("chr"), name, groupId, nodes: [] };
 }
 
 export function createNode(title, isHub = false) {

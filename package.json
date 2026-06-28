@@ -4,6 +4,7 @@
   "description": "Éditeur web collaboratif de dialogues Yarn Spinner pour le jeu de postier.",
   "type": "module",
   "scripts": {
-    "example": "node src/example.js"
+    "example": "node src/example.js",
+    "serve": "node scripts/serve.mjs"
   }
 }

@@ -37,24 +37,67 @@ répétées est gérée en Yarn Spinner par un **nœud d'aiguillage (hub)** + de
 Fait :
 - Modèle de données + compilateur `.yarn` + validateur → `src/dialogueModel.js`
 - Exemple jouable « Marie et la lettre à Jeanne » → `src/example.js` (`npm run example`)
-- Prototype d'éditeur web fonctionnel sur **données locales** → `index.html`,
-  `src/app.js`, `src/styles.css`, données de démo `src/sampleData.js`
-  (sidebar par hameau, canevas avec nœuds déplaçables, panneau d'édition,
-  conditions via menus déroulants, validation live, export `.yarn`).
+- Prototype d'éditeur web fonctionnel → `index.html`, `src/app.js`, `src/styles.css`,
+  données de démo `src/sampleData.js` (sidebar par groupe, canevas avec nœuds
+  déplaçables, panneau d'édition, conditions via menus déroulants, validation
+  live, export `.yarn`).
+- **Branchement Firebase (Firestore)** → `src/firebase.js` + `src/firebaseConfig.js` :
+  persistance + temps réel + code de salle. **Config branchée et fonctionnelle.**
+- **Écran d'entrée (gate)** : impossible d'atteindre l'éditeur sans rejoindre ou
+  créer une salle. Création = choix du **nom de projet** + code généré (`POSTE-XXXXX`).
+  Lien `?code=...` rejoint directement (partage).
+- **Groupes de personnages** (ex-« hameaux ») : créer / renommer / supprimer un
+  groupe, et affecter chaque personnage à un groupe (sélecteur dans la barre du
+  canevas). Renommer le projet = clic sur son nom dans le bandeau.
+- **Éditeur de variables** (autonomie des écrivains) : fenêtre « Variables
+  partagées » pour créer / renommer / typer / supprimer les variables. Le libellé
+  est lisible ; l'identifiant Yarn est généré auto (`createVariable`/`slugifyName`)
+  et figé pour ne pas casser les références. Suppression avec avertissement si la
+  variable est utilisée (`countVariableUsage`).
 
 Pas encore fait :
-- **Branchement Firebase** (persistance + temps réel + code de salle) ← prochaine grande étape
-- Écrans de gestion des hameaux et des variables (actuellement en dur dans `sampleData.js`)
 - Export du projet entier (aujourd'hui : export par personnage)
-- Pas de sauvegarde : recharger la page repart de la démo (c'est le rôle de Firebase)
+- Gestion fine des conflits temps réel (v1 = last-write-wins ; cf. limites ci-dessous)
+- Démarrer une salle neuve **vide** plutôt que sur la démo (bloqué tant qu'il n'y a
+  pas d'éditeur de variables : sans variables, pas de conditions possibles)
+
+## Firebase (où on en est)
+
+L'architecture est branchée et suit la décision n°3 (Firestore, code de salle =
+id du document). Découpage :
+- `src/firebaseConfig.js` : la config CLIENT (clés publiques, PAS un secret →
+  committable) + les règles Firestore à coller. Tant que les valeurs commencent
+  par `REMPLACE`, l'app tourne en **mode local** (démo, sans sauvegarde).
+- `src/firebase.js` : seule partie qui connaît Firebase. SDK importé en modules
+  ES depuis le CDN gstatic (aucun npm, compatible GitHub Pages). Expose
+  `isConfigured()`, `saveProject(code, project)`, `subscribeProject(code, cb)`.
+- `src/app.js` : une « salle » = document `projects/{code}`. Écran d'entrée
+  obligatoire (rejoindre/créer) ; `?code=` dans l'URL rejoint directement.
+  Sauvegarde débouncée (~600 ms) sur chaque édition ; écoute temps réel via
+  `onSnapshot`. `normalizeProject()` migre les vieilles salles (`hameaux`→`groups`).
+
+Projet Firebase utilisé : **`dialog-app-unity`** (forfait Spark gratuit), base
+Firestore en région EU, règles « accès ouvert par code de salle ». La config
+client est déjà dans `src/firebaseConfig.js`.
+
+### Limites connues (v1, à améliorer plus tard)
+- **Last-write-wins** : si deux personnes éditent le même projet en même temps,
+  la dernière sauvegarde gagne (comparaison `meta.updatedAt`). Pas de fusion fine.
+- Un changement distant reçu pendant qu'on tape **reconstruit l'inspecteur** →
+  peut faire perdre le focus. Acceptable entre amis ; à raffiner si gênant.
+- Tout le projet tient dans **un seul document** Firestore (limite 1 Mo). Large
+  pour du texte de dialogue, mais à surveiller si le projet grossit beaucoup.
 
 ## Lancer en local
 
 Les modules ES exigent un serveur (pas d'ouverture en `file://`) :
 
 ```bash
-python3 -m http.server 8123   # puis http://localhost:8123
+npm run serve     # serveur Node sans dépendance → http://localhost:4321
 ```
+
+(Sur cette machine, le port 8123 est pris par le proxy SOCKS du VPN ; on utilise
+4321. Python n'est pas installé, d'où le petit serveur Node `scripts/serve.mjs`.)
 
 Tester le moteur seul : `npm run example`
 
@@ -64,9 +107,12 @@ Tester le moteur seul : `npm run example`
 |---|---|
 | `src/dialogueModel.js` | Cœur : schéma, fabriques, `compileCharacterToYarn`, `validateProject` |
 | `src/sampleData.js` | Projet de démo (Marie, Tom) |
-| `src/app.js` | Logique de l'éditeur (rendu + interactions, vanilla JS) |
+| `src/app.js` | Logique de l'éditeur (rendu + interactions + salle Firebase, vanilla JS) |
+| `src/firebase.js` | Accès Firestore (load/save/subscribe) — seule partie liée à Firebase |
+| `src/firebaseConfig.js` | Config client Firebase (à remplir) + règles Firestore |
 | `index.html`, `src/styles.css` | Interface |
 | `src/example.js` | Démo console du compilateur |
+| `scripts/serve.mjs` | Serveur statique local sans dépendance (`npm run serve`) |
 | `docs/format-donnees.md` | Référence détaillée du format de données |
 | `README.md` | Lancer / déployer (pour les amis) |
 

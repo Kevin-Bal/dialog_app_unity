@@ -1,15 +1,23 @@
 /**
- * Prototype d'éditeur (données locales, sans Firebase pour l'instant).
- * Lit/écrit directement les objets du modèle ; l'export réutilise le compilateur.
+ * Éditeur de dialogues. Lit/écrit directement les objets du modèle ;
+ * l'export réutilise le compilateur.
+ *
+ * Persistance : si Firebase est configuré (src/firebaseConfig.js), l'app
+ * rejoint une « salle » (document Firestore) et synchronise en temps réel.
+ * Sinon, elle tourne en LOCAL sur la démo (aucune sauvegarde).
  */
 import { buildSampleProject } from "./sampleData.js";
 import {
   createCharacter,
+  createGroup,
   createNode,
+  createVariable,
   compileCharacterToYarn,
   validateProject,
   yarnNodeTitle,
+  normalizeProject,
 } from "./dialogueModel.js";
+import { isConfigured, saveProject, subscribeProject } from "./firebase.js";
 
 const OPS = ["==", "!=", ">", ">=", "<", "<="];
 
@@ -46,31 +54,40 @@ const el = (tag, props = {}, children = []) => {
 function renderSidebar() {
   const root = document.getElementById("sidebar");
   root.innerHTML = "";
-  root.append(el("div", { className: "side-label", textContent: "Personnages" }));
+  root.append(el("div", { className: "side-label", textContent: "Groupes" }));
 
   const chars = Object.values(state.project.characters);
-  for (const hameau of state.project.settings.hameaux) {
-    const inHameau = chars.filter((c) => c.hameauId === hameau.id);
-    if (!inHameau.length) continue;
-    root.append(el("div", { className: "hameau-name", textContent: hameau.name }));
-    for (const c of inHameau) {
-      const item = el("div", {
-        className: "char-item" + (c.id === state.charId ? " active" : ""),
-        onclick: () => selectCharacter(c.id),
-      });
-      item.append(el("span", { textContent: c.name }));
-      item.append(el("span", { className: "count", textContent: `${c.nodes.length}` }));
-      root.append(item);
-    }
+  const groups = state.project.settings.groups;
+
+  for (const group of groups) {
+    const inGroup = chars.filter((c) => c.groupId === group.id);
+    root.append(groupHeader(group, inGroup.length));
+    for (const c of inGroup) root.append(charItem(c));
   }
 
-  const addBtn = el("button", {
-    className: "ghost",
-    textContent: "+ Personnage",
-    style: "width:100%;margin-top:12px",
-    onclick: addCharacter,
-  });
-  root.append(addBtn);
+  // Personnages sans groupe (ex. après suppression d'un groupe).
+  const orphans = chars.filter((c) => !groups.some((g) => g.id === c.groupId));
+  if (orphans.length) {
+    root.append(el("div", { className: "hameau-name muted", textContent: "Sans groupe" }));
+    for (const c of orphans) root.append(charItem(c));
+  }
+
+  root.append(
+    el("button", {
+      className: "ghost",
+      textContent: "+ Groupe",
+      style: "width:100%;margin-top:12px",
+      onclick: addGroup,
+    })
+  );
+  root.append(
+    el("button", {
+      className: "ghost",
+      textContent: "+ Personnage",
+      style: "width:100%;margin-top:6px",
+      onclick: addCharacter,
+    })
+  );
 
   root.append(el("hr", { className: "side-divider" }));
   const vars = el("div", {
@@ -81,10 +98,56 @@ function renderSidebar() {
   root.append(vars);
 }
 
+function groupHeader(group, count) {
+  const head = el("div", { className: "hameau-name group-head" });
+  head.append(el("span", { className: "group-name", textContent: group.name }));
+  const tools = el("span", { className: "group-tools" });
+  tools.append(
+    el("button", { className: "mini ghost", title: "Renommer", textContent: "✎", onclick: () => renameGroup(group) })
+  );
+  tools.append(
+    el("button", { className: "mini ghost", title: "Supprimer le groupe", textContent: "✕", onclick: () => deleteGroup(group) })
+  );
+  head.append(tools);
+  return head;
+}
+
+function charItem(c) {
+  const item = el("div", {
+    className: "char-item" + (c.id === state.charId ? " active" : ""),
+    onclick: () => selectCharacter(c.id),
+  });
+  item.append(el("span", { textContent: c.name }));
+  item.append(el("span", { className: "count", textContent: `${c.nodes.length}` }));
+  return item;
+}
+
+/* Barre du canevas : titre du dialogue + groupe du personnage courant. */
+function renderCharBar() {
+  const title = document.getElementById("canvas-title");
+  title.textContent = "";
+  const char = currentChar();
+  if (!char) {
+    title.textContent = "—";
+    return;
+  }
+  title.append(el("span", { textContent: `Dialogue de ${char.name}` }));
+
+  const wrap = el("label", { className: "char-group" });
+  wrap.append(el("span", { textContent: "Groupe :" }));
+  const sel = el("select");
+  sel.append(el("option", { value: "", textContent: "— Sans groupe —", selected: !char.groupId }));
+  for (const g of state.project.settings.groups) {
+    sel.append(el("option", { value: g.id, textContent: g.name, selected: g.id === char.groupId }));
+  }
+  sel.onchange = () => setCharacterGroup(sel.value);
+  wrap.append(sel);
+  title.append(wrap);
+}
+
 /* -------------------- canvas -------------------- */
 function renderCanvas() {
-  document.getElementById("canvas-title").textContent =
-    currentChar() ? `Dialogue de ${currentChar().name}` : "—";
+  renderCharBar();
 
   const canvas = document.getElementById("canvas");
   // on retire les anciennes cartes (garde le <svg>)
@@ -197,6 +260,7 @@ function endDrag() {
   drag = null;
   document.removeEventListener("mousemove", onDrag);
   document.removeEventListener("mouseup", endDrag);
+  scheduleSave(); // la position du nœud a changé
 }
 
 /* -------------------- inspector -------------------- */
@@ -391,7 +455,7 @@ function choiceCard(node, ch, i) {
   card.append(head);
 
   const lbl = el("input", { type: "text", value: ch.label });
-  lbl.oninput = () => { ch.label = lbl.value; renderCanvas(); };
+  lbl.oninput = () => { ch.label = lbl.value; renderCanvas(); scheduleSave(); };
   card.append(lbl);
 
   card.append(el("div", { className: "insp-sub", style: "margin-top:8px", textContent: "mène vers" }));
@@ -429,6 +493,7 @@ function nodeSelect(currentId, onChange) {
 
 /* -------------------- validation -------------------- */
 function renderValidation() {
+  scheduleSave(); // appelée par presque toutes les éditions de contenu
   const root = document.getElementById("validation");
   root.innerHTML = "";
   const issues = validateProject(state.project);
@@ -479,10 +544,40 @@ function selectNode(id) {
 function addCharacter() {
   const name = prompt("Nom du personnage ?");
   if (!name) return;
-  const hameauId = state.project.settings.hameaux[0]?.id;
-  const c = createCharacter(name, hameauId);
+  const groupId = state.project.settings.groups[0]?.id ?? null;
+  const c = createCharacter(name.trim(), groupId);
   state.project.characters[c.id] = c;
   selectCharacter(c.id);
+}
+
+/* --- groupes --- */
+function addGroup() {
+  const name = prompt("Nom du nouveau groupe ?");
+  if (!name) return;
+  state.project.settings.groups.push(createGroup(name.trim()));
+  refresh();
+}
+function renameGroup(group) {
+  const name = prompt("Renommer le groupe :", group.name);
+  if (!name) return;
+  group.name = name.trim();
+  refresh();
+}
+function deleteGroup(group) {
+  const inGroup = Object.values(state.project.characters).filter((c) => c.groupId === group.id);
+  const msg = inGroup.length
+    ? `Supprimer le groupe « ${group.name} » ?\nSes ${inGroup.length} personnage(s) deviendront « Sans groupe » (ils ne sont PAS supprimés).`
+    : `Supprimer le groupe « ${group.name} » ?`;
+  if (!confirm(msg)) return;
+  for (const c of inGroup) c.groupId = null;
+  state.project.settings.groups = state.project.settings.groups.filter((g) => g.id !== group.id);
+  refresh();
+}
+/** Change le groupe du personnage courant (depuis la barre du canevas). */
+function setCharacterGroup(groupId) {
+  const char = currentChar();
+  if (char) char.groupId = groupId || null;
+  refresh();
 }
 function addNode(isHub) {
   const node = createNode(isHub ? "Aiguillage" : "Nouveau nœud", isHub);
@@ -497,11 +592,155 @@ function deleteNode(node) {
   state.nodeId = char.nodes[0]?.id ?? null;
   refresh();
 }
+/* -------------------- gestionnaire de variables -------------------- */
+const VAR_TYPES = [
+  ["bool", "Oui / Non"],
+  ["number", "Nombre"],
+  ["string", "Texte"],
+];
+
+/** Compte combien de fois une variable est utilisée (conditions / set) dans tout le projet. */
+function countVariableUsage(name) {
+  let n = 0;
+  const inConds = (conds) => (conds || []).filter((c) => c.variable === name).length;
+  for (const char of Object.values(state.project.characters)) {
+    for (const node of char.nodes) {
+      n += inConds(node.conditions);
+      for (const line of node.lines || []) if (line.kind === "set" && line.action?.variable === name) n++;
+      for (const ch of node.choices || []) {
+        n += inConds(ch.conditions);
+        n += (ch.setActions || []).filter((a) => a.variable === name).length;
+      }
+      for (const b of node.branches || []) n += inConds(b.conditions);
+    }
+  }
+  return n;
+}
+
 function showVariables() {
-  const lines = state.project.settings.variables
-    .map((v) => `• ${v.label}  ($${v.name}, ${v.type})`)
-    .join("\n");
-  alert("Variables partagées du projet :\n\n" + lines);
+  const overlay = el("div", {
+    className: "modal-overlay",
+    onclick: (e) => { if (e.target === overlay) overlay.remove(); },
+  });
+  const card = el("div", { className: "modal-card" });
+
+  const head = el("div", { className: "modal-head" });
+  head.append(el("strong", { textContent: "Variables partagées" }));
+  head.append(el("button", { className: "mini ghost", textContent: "✕", onclick: () => overlay.remove() }));
+  card.append(head);
+
+  card.append(
+    el("p", {
+      className: "modal-sub",
+      textContent:
+        "Les variables mémorisent l'état du jeu (ex. « la lettre est livrée »). " +
+        "Tout le monde les partage : on les choisit ensuite dans les menus déroulants.",
+    })
+  );
+
+  const list = el("div", { className: "var-list" });
+  card.append(list);
+  card.append(
+    el("button", { className: "ghost", textContent: "+ Variable", style: "margin-top:10px", onclick: () => addVariable(list) })
+  );
+
+  renderVarList(list);
+  overlay.append(card);
+  document.body.append(overlay);
+}
+
+function renderVarList(list) {
+  list.innerHTML = "";
+  const vars = state.project.settings.variables;
+  if (!vars.length) {
+    list.append(el("div", { className: "empty", textContent: "Aucune variable. Crée-en une avec « + Variable »." }));
+    return;
+  }
+  for (const v of vars) list.append(varRow(v, list));
+}
+
+function varRow(v, list) {
+  const row = el("div", { className: "var-row" });
+
+  // Libellé lisible (modifiable). L'identifiant Yarn reste figé pour ne pas
+  // casser les références existantes.
+  const lbl = el("input", { type: "text", value: v.label, className: "var-label" });
+  lbl.onchange = () => { v.label = lbl.value.trim() || v.name; refresh(); renderVarList(list); };
+
+  // Type
+  const typeSel = el("select", { className: "var-type" });
+  for (const [val, txt] of VAR_TYPES) {
+    typeSel.append(el("option", { value: val, textContent: txt, selected: val === v.type }));
+  }
+  typeSel.onchange = () => {
+    v.type = typeSel.value;
+    v.default = v.type === "bool" ? false : v.type === "number" ? 0 : "";
+    refresh();
+    renderVarList(list);
+  };
+
+  // Valeur par défaut
+  const defWrap = el("label", { className: "var-default" });
+  defWrap.append(el("span", { textContent: "défaut :" }));
+  defWrap.append(varDefaultInput(v));
+
+  // Suppression (avec avertissement si utilisée)
+  const del = el("button", {
+    className: "danger mini",
+    textContent: "✕",
+    title: "Supprimer la variable",
+    onclick: () => deleteVariable(v, list),
+  });
+
+  const top = el("div", { className: "var-top" });
+  top.append(lbl, typeSel, del);
+  row.append(top);
+
+  const meta = el("div", { className: "var-meta" });
+  meta.append(defWrap);
+  const used = countVariableUsage(v.name);
+  meta.append(el("span", { className: "var-id", textContent: `id: $${v.name}${used ? ` · utilisée ${used}×` : ""}` }));
+  row.append(meta);
+  return row;
+}
+
+function varDefaultInput(v) {
+  if (v.type === "bool") {
+    const sel = el("select");
+    sel.append(el("option", { value: "false", textContent: "Non", selected: v.default !== true }));
+    sel.append(el("option", { value: "true", textContent: "Oui", selected: v.default === true }));
+    sel.onchange = () => { v.default = sel.value === "true"; scheduleSave(); };
+    return sel;
+  }
+  if (v.type === "number") {
+    const inp = el("input", { type: "number", value: v.default ?? 0, style: "width:70px" });
+    inp.oninput = () => { v.default = Number(inp.value); scheduleSave(); };
+    return inp;
+  }
+  const inp = el("input", { type: "text", value: v.default ?? "" });
+  inp.oninput = () => { v.default = inp.value; scheduleSave(); };
+  return inp;
+}
+
+function addVariable(list) {
+  const label = prompt("Nom de la variable (ex. « Lettre livrée ») :");
+  if (!label) return;
+  const existing = state.project.settings.variables.map((v) => v.name);
+  state.project.settings.variables.push(createVariable(label.trim(), "bool", existing));
+  refresh();
+  renderVarList(list);
+}
+
+function deleteVariable(v, list) {
+  const used = countVariableUsage(v.name);
+  const msg = used
+    ? `Supprimer « ${v.label} » ?\nElle est utilisée ${used} fois (conditions / changements). ` +
+      `Ces usages garderont un menu déroulant vide à corriger.`
+    : `Supprimer « ${v.label} » ?`;
+  if (!confirm(msg)) return;
+  state.project.settings.variables = state.project.settings.variables.filter((x) => x.name !== v.name);
+  refresh();
+  renderVarList(list);
 }
 function exportYarn() {
   const char = currentChar();
@@ -548,14 +787,202 @@ function coerce(s) {
 }
 
 function refresh() {
+  renderProjectName();
   renderSidebar();
   renderCanvas();
   renderInspector();
   renderValidation();
+  scheduleSave();
+}
+
+function renderProjectName() {
+  document.getElementById("project-name").textContent =
+    state.project.meta?.name || "Projet sans nom";
+}
+function renameProject() {
+  if (!room.connected) return; // on ne renomme qu'une salle ouverte
+  const name = prompt("Nom du projet :", state.project.meta?.name || "");
+  if (!name) return;
+  state.project.meta.name = name.trim();
+  refresh();
+}
+
+/* -------------------- salle Firebase (persistance + temps réel) -------------------- */
+const room = { code: null, connected: false, unsub: null, intent: null };
+let applyingRemote = false; // true pendant qu'on applique un changement distant
+let firstSnapshot = false;  // 1er snapshot après connexion (décide rejoindre/créer)
+let saveTimer = null;
+
+/** Programme une sauvegarde (débouncée) du projet vers Firestore. */
+function scheduleSave() {
+  if (applyingRemote || !room.connected) return; // ni en mode local, ni en écho distant
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    state.project.meta.updatedAt = Date.now();
+    saveProject(room.code, state.project).catch((e) => console.error("Sauvegarde échouée :", e));
+  }, 600);
+}
+
+function updateRoomChip() {
+  const chip = document.getElementById("room-code");
+  if (room.connected) {
+    chip.textContent = room.code;
+    chip.title = "Salle partagée — clique pour en changer";
+    chip.classList.remove("offline");
+  } else {
+    chip.textContent = "—";
+    chip.classList.add("offline");
+  }
+}
+
+/* --- écran d'entrée (gate) --- */
+function showGate(message) {
+  document.getElementById("app").classList.add("is-hidden");
+  document.getElementById("gate").classList.remove("is-hidden");
+  gateError(message || "");
+  const input = document.getElementById("gate-code");
+  if (!input.value) input.value = localStorage.getItem("roomCode") || "";
+  input.focus();
+}
+function hideGate() {
+  document.getElementById("gate").classList.add("is-hidden");
+  document.getElementById("app").classList.remove("is-hidden");
+}
+function gateError(msg) {
+  document.getElementById("gate-error").textContent = msg || "";
+}
+
+/** Code lisible, sans caractères ambigus (I, L, O, 0, 1). */
+function randomCode() {
+  const abc = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  let s = "";
+  for (let i = 0; i < 5; i++) s += abc[Math.floor(Math.random() * abc.length)];
+  return "POSTE-" + s;
+}
+
+async function initRoom() {
+  updateRoomChip();
+  if (!isConfigured()) {
+    document.getElementById("gate-join").disabled = true;
+    document.getElementById("gate-create").disabled = true;
+    showGate("Firebase n'est pas configuré (voir src/firebaseConfig.js).");
+    return;
+  }
+  const urlCode = new URLSearchParams(location.search).get("code");
+  if (urlCode) {
+    connectRoom(urlCode.trim(), "join"); // lien partagé : on rejoint directement
+  } else {
+    showGate();
+  }
+}
+
+/** Rouvre l'écran d'entrée pour changer de salle (clic sur le chip). */
+function changeRoom() {
+  if (!isConfigured()) return;
+  showGate();
+}
+
+async function connectRoom(code, intent, newName) {
+  code = (code || "").trim().replace(/\//g, "-"); // "/" interdit dans un id Firestore
+  if (!code) {
+    gateError("Entre un code de salle.");
+    return;
+  }
+  if (room.unsub) room.unsub();
+  room.code = code;
+  room.intent = intent;
+  room.newName = newName; // nom voulu si on crée la salle
+  room.connected = false;
+  firstSnapshot = true;
+  try {
+    room.unsub = await subscribeProject(code, onRemote);
+  } catch (e) {
+    showGate("Connexion impossible : " + e.message);
+  }
+}
+
+/** Finalise l'entrée dans une salle : URL, mémorisation, affichage de l'éditeur. */
+function finalizeJoin() {
+  room.connected = true;
+  localStorage.setItem("roomCode", room.code);
+  const url = new URL(location);
+  url.searchParams.set("code", room.code);
+  history.replaceState(null, "", url);
+  updateRoomChip();
+  hideGate();
+}
+
+function onRemote({ exists, data, hasPendingWrites }) {
+  if (firstSnapshot) {
+    firstSnapshot = false;
+
+    if (exists) {
+      // La salle existe : on charge son contenu (peu importe l'intention).
+      applyRemote(data);
+      finalizeJoin();
+      return;
+    }
+    if (room.intent === "create") {
+      // Salle neuve : on y dépose un projet de départ (la démo) puis on entre.
+      seedNewRoom();
+      finalizeJoin();
+      refresh(); // déclenche la 1re sauvegarde (room.connected est maintenant true)
+      return;
+    }
+    // On voulait rejoindre une salle qui n'existe pas → on reste sur l'écran d'entrée.
+    if (room.unsub) { room.unsub(); room.unsub = null; }
+    const tried = room.code;
+    room.code = null;
+    showGate(`Aucune salle « ${tried} ». Vérifie le code ou crée-en une nouvelle.`);
+    return;
+  }
+
+  // Snapshots suivants (temps réel)
+  if (!exists || hasPendingWrites) return; // ignore l'écho de nos propres écritures
+  // Last-write-wins : on n'applique que ce qui est plus récent que notre état.
+  if ((data.meta?.updatedAt ?? 0) <= (state.project.meta?.updatedAt ?? 0)) return;
+  applyRemote(data);
+}
+
+/** Prépare un projet de départ pour une salle neuve. */
+function seedNewRoom() {
+  state.project = buildSampleProject();
+  state.project.meta.code = room.code;
+  state.project.meta.name = room.newName || "Nouveau projet";
+  state.charId = Object.keys(state.project.characters)[0] ?? null;
+  state.nodeId = state.charId ? currentChar().nodes[0]?.id ?? null : null;
+}
+
+/** Remplace l'état local par la version distante et re-rend, sans re-sauvegarder. */
+function applyRemote(project) {
+  applyingRemote = true;
+  state.project = normalizeProject(project); // migration douce des anciennes salles
+  // On garde une sélection valide (le personnage/nœud courant peut avoir disparu).
+  if (!state.project.characters[state.charId]) {
+    state.charId = Object.keys(state.project.characters)[0] ?? null;
+  }
+  if (state.charId && !currentChar().nodes.find((n) => n.id === state.nodeId)) {
+    state.nodeId = currentChar().nodes[0]?.id ?? null;
+  }
+  refresh();
+  applyingRemote = false;
 }
 
 /* -------------------- init -------------------- */
 document.getElementById("btn-export").onclick = exportYarn;
 document.getElementById("btn-add-node").onclick = () => addNode(false);
 document.getElementById("btn-add-hub").onclick = () => addNode(true);
+document.getElementById("room-code").onclick = changeRoom;
+document.getElementById("project-name").onclick = renameProject;
+
+// Écran d'entrée
+document.getElementById("gate-join").onclick = () =>
+  connectRoom(document.getElementById("gate-code").value, "join");
+document.getElementById("gate-create").onclick = () =>
+  connectRoom(randomCode(), "create", document.getElementById("gate-project").value.trim());
+document.getElementById("gate-code").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") document.getElementById("gate-join").click();
+});
+
 refresh();
+initRoom();

@@ -14,7 +14,7 @@ import {
 const project = createProject("Île aux Lettres", "POSTE-42");
 
 // --- Registre central partagé (le "settings" que tout le monde voit) ---
-project.settings.hameaux = [{ id: "port", name: "Hameau du Port" }];
+project.settings.groups = [{ id: "port", name: "Le Port" }];
 project.settings.variables = [
   { name: "marie_etape", type: "number", label: "Avancement de Marie", default: 0 },
   { name: "marie_lettre_a_livrer", type: "bool", label: "Marie a une lettre à livrer", default: false },

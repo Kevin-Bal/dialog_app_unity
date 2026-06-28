@@ -1,15 +1,15 @@
 /**
  * Projet de démonstration chargé au lancement du prototype.
  * Reprend le scénario "Marie et la lettre à Jeanne" + un PNJ vide (Tom)
- * pour montrer la liste par hameau. Plus tard, ces données viendront de Firebase.
+ * pour montrer la liste par groupe. Plus tard, ces données viendront de Firebase.
  */
 import { createProject, createCharacter, createNode } from "./dialogueModel.js";
 
 export function buildSampleProject() {
   const project = createProject("Île aux Lettres", "POSTE-42");
 
-  project.settings.hameaux = [
-    { id: "port", name: "Hameau du Port" },
+  project.settings.groups = [
+    { id: "port", name: "Le Port" },
     { id: "collines", name: "Les Collines" },
   ];
   project.settings.variables = [

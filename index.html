@@ -7,7 +7,28 @@
     <link rel="stylesheet" href="src/styles.css" />
   </head>
   <body>
-    <div id="app">
+    <!-- Écran d'entrée : il faut rejoindre ou créer une salle avant l'éditeur -->
+    <div id="gate">
+      <div class="gate-card">
+        <div class="gate-brand"><span class="dot"></span><strong>Île aux Lettres</strong></div>
+        <p class="gate-sub">Éditeur de dialogues partagé</p>
+
+        <label class="gate-label" for="gate-code">Rejoindre une salle existante</label>
+        <div class="gate-row">
+          <input id="gate-code" type="text" placeholder="Code de salle" autocomplete="off" spellcheck="false" />
+          <button id="gate-join" class="primary">Entrer</button>
+        </div>
+
+        <div class="gate-or"><span>ou</span></div>
+
+        <label class="gate-label" for="gate-project">Créer une nouvelle salle</label>
+        <input id="gate-project" type="text" placeholder="Nom du projet (optionnel)" autocomplete="off" />
+        <button id="gate-create" class="ghost gate-create">Créer la salle</button>
+        <p id="gate-error" class="gate-error"></p>
+      </div>
+    </div>
+
+    <div id="app" class="is-hidden">
       <header id="topbar">
         <div class="brand">
           <span class="dot"></span>
